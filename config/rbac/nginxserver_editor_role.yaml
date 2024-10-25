@@ -1,0 +1,27 @@
+# permissions for end users to edit nginxservers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: nginx-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: nginxserver-editor-role
+rules:
+- apiGroups:
+  - webserver.example.com
+  resources:
+  - nginxservers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - webserver.example.com
+  resources:
+  - nginxservers/status
+  verbs:
+  - get
