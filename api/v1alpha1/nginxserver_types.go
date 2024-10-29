@@ -21,8 +21,9 @@ import (
 
 // NginxServerSpec defines the desired state of NginxServer
 type NginxServerSpec struct {
-	Replicas   int32 `json:"replicas"`
-	Persistent bool  `json:"persistent,omitempty"`
+	PvcEnabled bool  `json:"pvcEnabled"`
+	Size string `json:"size,omitempty"`
+	Replica int32 `json:"replica,omitempty"`
 }
 
 // NginxServerStatus defines the observed state of NginxServer

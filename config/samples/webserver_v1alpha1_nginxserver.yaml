@@ -3,5 +3,7 @@ kind: NginxServer
 metadata:
   name: nginx-sample
 spec:
-  replicas: 2
-  persistent: true
+  pvcEnabled: false
+  size: 2Gi
+  replica: 1
+

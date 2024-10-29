@@ -39,13 +39,15 @@ spec:
           spec:
             description: NginxServerSpec defines the desired state of NginxServer
             properties:
-              persistent:
+              pvcEnabled:
                 type: boolean
-              replicas:
+              replica:
                 format: int32
                 type: integer
+              size:
+                type: string
             required:
-            - replicas
+            - pvcEnabled
             type: object
           status:
             description: NginxServerStatus defines the observed state of NginxServer

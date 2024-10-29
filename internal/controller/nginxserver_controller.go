@@ -9,7 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
-    "k8s.io/apimachinery/pkg/api/resource" // Import this for resource.Quantity
+    "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,7 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
     ctrl "sigs.k8s.io/controller-runtime"
-        "sigs.k8s.io/controller-runtime/pkg/manager"
+    "sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 // NginxServerReconciler reconciles an NginxServer object
@@ -58,29 +58,55 @@ func (r *NginxServerReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	}
 
 	// Ensure PVC exists if persistent is enabled
-	if nginxServer.Spec.Persistent {
+	if nginxServer.Spec.PvcEnabled {
 		pvc := r.createPersistentVolumeClaim(nginxServer)
 		if err := r.Client.Create(ctx, pvc); err != nil && !errors.IsAlreadyExists(err) {
 			log.Error(err, "Failed to create PVC for NginxServer.")
 			return reconcile.Result{}, err
 		}
-	}
+	} else {
+     		// Delete PVC if Persistent is false
+     		pvc := &corev1.PersistentVolumeClaim{
+     			ObjectMeta: metav1.ObjectMeta{
+     				Name:      "nginx-html-pvc",
+     				Namespace: nginxServer.Namespace,
+     			},
+     		}
+     		if err := r.Client.Delete(ctx, pvc); err != nil {
+     			if !errors.IsNotFound(err) {
+     				log.Error(err, "Failed to delete PVC for NginxServer.")
+     				return reconcile.Result{}, err
+     			}
+     		} else {
+     			log.Info("PVC deleted for NginxServer", "pvcName", pvc.Name, "namespace", pvc.Namespace)
+     		}
+     	}
 
-	// Ensure Deployment exists
+
 	deployment, err := r.createNginxDeployment(ctx, nginxServer)
-	if err != nil {
-		log.Error(err, "Failed to create Deployment for NginxServer.")
-		return reconcile.Result{}, err
-	}
-
-	// Ensure Deployment matches desired replicas
-	if *deployment.Spec.Replicas != nginxServer.Spec.Replicas {
-		deployment.Spec.Replicas = &nginxServer.Spec.Replicas
-		if err := r.Client.Update(ctx, deployment); err != nil {
-			log.Error(err, "Failed to update Deployment replica count.")
+    if err := r.Client.Create(ctx, deployment); err != nil && !errors.IsAlreadyExists(err) {
+			log.Error(err, "Failed to create Deployment for NginxServer.")
 			return reconcile.Result{}, err
 		}
-	}
+
+// Fetch the current Deployment and compare replica count
+currentDeployment := &appsv1.Deployment{}
+err = r.Client.Get(ctx, client.ObjectKey{Name: nginxServer.Name, Namespace: nginxServer.Namespace}, currentDeployment)
+if err != nil {
+    log.Error(err, "Failed to get current Deployment for NginxServer.")
+    return reconcile.Result{}, err
+}
+
+// Update replica count if it doesn't match
+desiredReplicas := nginxServer.Spec.Replica
+if *currentDeployment.Spec.Replicas != desiredReplicas {
+    currentDeployment.Spec.Replicas = &desiredReplicas
+    if err := r.Client.Update(ctx, currentDeployment); err != nil {
+        log.Error(err, "Failed to update Deployment replica count.")
+        return reconcile.Result{}, err
+    }
+    log.Info("Updated Deployment replica count", "replica", desiredReplicas)
+}
 // Ensure Service exists to expose NGINX
 	service, err := r.createNginxService(ctx, nginxServer)
 	if err != nil {
@@ -89,7 +115,7 @@ func (r *NginxServerReconciler) Reconcile(ctx context.Context, req reconcile.Req
 	}
 	log.Info("NGINX Service created", "serviceName", service.Name, "namespace", service.Namespace)
 
-	return reconcile.Result{RequeueAfter: time.Minute * 5}, nil
+	return reconcile.Result{RequeueAfter: time.Minute * 1}, nil
 }
 
 // createIndexConfigMap creates a ConfigMap for the Nginx index.html file
@@ -109,6 +135,8 @@ func (r *NginxServerReconciler) createIndexConfigMap(nginxServer *webserverv1alp
 
 func (r *NginxServerReconciler) createPersistentVolumeClaim(nginxServer *webserverv1alpha1.NginxServer) *corev1.PersistentVolumeClaim {
     labels := map[string]string{"app": "nginx", "nginxserver_cr": nginxServer.Name}
+    size := nginxServer.Spec.Size
+
     return &corev1.PersistentVolumeClaim{
         ObjectMeta: metav1.ObjectMeta{
             Name:      "nginx-html-pvc",
@@ -119,7 +147,7 @@ func (r *NginxServerReconciler) createPersistentVolumeClaim(nginxServer *webserv
             AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
             Resources: corev1.VolumeResourceRequirements{
                 Requests: corev1.ResourceList{
-                    corev1.ResourceStorage: resource.MustParse("1Gi"), // Ensures 1Gi is parsed as resource.Quantity
+                    corev1.ResourceStorage: resource.MustParse(size),
                 },
             },
         },
@@ -142,10 +170,10 @@ func (r *NginxServerReconciler) createNginxService(ctx context.Context, nginxSer
 					Port:       80,
                     TargetPort: intstr.FromInt(80),
                     Protocol:   corev1.ProtocolTCP,
-                    NodePort:   30080,
+                    NodePort: 30070,
 				},
 			},
-			Type: corev1.ServiceTypeLoadBalancer,
+			Type: corev1.ServiceTypeNodePort,
 		},
 	}
 	if err := controllerutil.SetControllerReference(nginxServer, service, r.Scheme); err != nil {
@@ -163,8 +191,8 @@ func (r *NginxServerReconciler) createNginxService(ctx context.Context, nginxSer
 // createNginxDeployment creates the Nginx Deployment with optional PVC and Init Container for index.html
 func (r *NginxServerReconciler) createNginxDeployment(ctx context.Context, nginxServer *webserverv1alpha1.NginxServer) (*appsv1.Deployment, error) {
 	labels := map[string]string{"app": "nginx", "nginxserver_cr": nginxServer.Name}
-	replicas := nginxServer.Spec.Replicas
-	pvcEnabled := nginxServer.Spec.Persistent
+	pvcEnabled := nginxServer.Spec.PvcEnabled
+    replicas := nginxServer.Spec.Replica
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -173,7 +201,7 @@ func (r *NginxServerReconciler) createNginxDeployment(ctx context.Context, nginx
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
+		    Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
